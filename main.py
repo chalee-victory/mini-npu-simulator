@@ -9,8 +9,7 @@ EPSILON = 1e-9                                            # 동점으로 볼 점
 LABEL_MAP = {"+": "Cross", "cross": "Cross", "x": "X"}    # 여러 라벨 표기 → 표준 라벨
 REPEAT = 10                                               # 성능 측정 반복 횟수
 LINE = "#" + "-" * 40                                     # 화면 구분선
-CROSS_3 = [[0, 1, 0], [1, 1, 1], [0, 1, 0]]                # 3×3 성능 측정용 십자가 배열
-X_3 = [[1, 0, 1], [0, 1, 0], [1, 0, 1]]                    # 3×3 성능 측정용 X 배열
+COMPARE_REPEAT = 1000                                     # 보너스 2차원/1차원 비교용 반복 횟수 (두 방식 동일)
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.json")  # main.py와 같은 폴더의 data.json
 
 
@@ -41,13 +40,48 @@ def judge(score_a, score_b, label_a="A", label_b="B"):
         return label_b
 
 
+# ===== 보너스: 패턴 생성기 =====
+def make_cross(n):
+    """n×n 십자가 패턴을 만든다. 가운데 행과 가운데 열이 1.0, 나머지는 0.0."""
+    mid = n // 2                                  # 가운데 위치 (n=5 → 2)
+    return [[1.0 if i == mid or j == mid else 0.0 for j in range(n)] for i in range(n)]
+
+
+def make_x(n):
+    """n×n X 패턴을 만든다. 두 대각선(i == j, i + j == n - 1)이 1.0, 나머지는 0.0."""
+    return [[1.0 if i == j or i + j == n - 1 else 0.0 for j in range(n)] for i in range(n)]
+
+
+def print_matrix(matrix):
+    """패턴을 ■(0이 아닌 값)와 □(0)로 그려서 보여 준다."""
+    for row in matrix:
+        print(" ".join("■" if v else "□" for v in row))
+
+
+# ===== 보너스: 1차원 배열 최적화 =====
+def flatten(matrix):
+    """n×n 2차원 배열을 길이 n²의 1차원 리스트로 편다. (행 순서대로 이어 붙임)"""
+    flat = []
+    for row in matrix:
+        flat.extend(row)                          # 한 행을 통째로 뒤에 붙임
+    return flat
+
+
+def mac_flat(a, b):
+    """1차원 리스트 두 개를 같은 위치끼리 곱해 모두 더한다. 반복문 1개, 인덱스 1개로 접근."""
+    total = 0
+    for k in range(len(a)):
+        total += a[k] * b[k]
+    return total
+
+
 # ===== 성능 측정 =====
-def measure_mac(pattern, flt, repeat=REPEAT):
-    """mac()을 repeat번 실행해 1회 평균 시간(ms)을 돌려준다. 입출력 시간은 포함하지 않는다."""
-    mac(pattern, flt)                             # 워밍업 1회 (첫 호출의 준비 시간이 측정에 섞이지 않게)
+def measure_mac(pattern, flt, repeat=REPEAT, func=mac):
+    """func(기본 mac)를 repeat번 실행해 1회 평균 시간(ms)을 돌려준다. 입출력 시간은 포함하지 않는다."""
+    func(pattern, flt)                            # 워밍업 1회 (첫 호출의 준비 시간이 측정에 섞이지 않게)
     start = time.perf_counter()                   # 측정 시작 (초 단위, 아주 정밀한 시계)
     for _ in range(repeat):
-        mac(pattern, flt)                         # 연산 함수 호출 구간만 측정
+        func(pattern, flt)                        # 연산 함수 호출 구간만 측정
     elapsed = time.perf_counter() - start         # 걸린 전체 시간 (초)
     return elapsed / repeat * 1000                # 1회 평균, 초 → ms 변환
 
@@ -61,8 +95,8 @@ def print_performance_table(rows):
 
 
 def run_performance(filters):
-    """3×3(고정 배열)과 data.json의 각 크기 필터로 MAC 평균 시간을 재서 [(N, ms), ...]로 반환한다."""
-    rows = [(3, measure_mac(CROSS_3, X_3))]       # data.json에는 3×3 필터가 없으므로 고정 배열 사용
+    """3×3(패턴 생성기)과 data.json의 각 크기 필터로 MAC 평균 시간을 재서 [(N, ms), ...]로 반환한다."""
+    rows = [(3, measure_mac(make_cross(3), make_x(3)))]   # data.json에는 3×3 필터가 없어 생성기로 만듦
     for n in sorted(filters):                     # 5, 13, 25 순서로
         rows.append((n, measure_mac(filters[n]["Cross"], filters[n]["X"])))
     return rows
@@ -116,10 +150,20 @@ def read_matrix(name, n=3):
 def run_mode1():
     """모드 1: 3×3 필터 A, B와 패턴을 입력받아 MAC 점수, 연산 시간, 판정을 출력한다."""
     print_section("[1] 필터 입력")
-    filter_a = read_matrix("필터 A")
-    print()
-    filter_b = read_matrix("필터 B")
-    print("✓ 필터 A, B 저장 완료")
+    answer = input("필터를 자동 생성할까요? (y = A 십자가 / B X 자동 생성, 엔터 = 직접 입력): ")
+    if answer.strip().lower() == "y":
+        filter_a = make_cross(3)                  # 보너스 패턴 생성기 재활용
+        filter_b = make_x(3)
+        print("필터 A (십자가)")
+        print_matrix(filter_a)
+        print("필터 B (X)")
+        print_matrix(filter_b)
+        print("✓ 필터 A, B 자동 생성 완료")
+    else:
+        filter_a = read_matrix("필터 A")
+        print()
+        filter_b = read_matrix("필터 B")
+        print("✓ 필터 A, B 저장 완료")
 
     print_section("[2] 패턴 입력")
     pattern = read_matrix("패턴")
@@ -297,15 +341,62 @@ def run_mode2(path=DATA_FILE):
     return results
 
 
+# ===== 모드 3: 보너스 =====
+def read_size(low=3, high=51, default=5):
+    """패턴 크기 N을 입력받는다. 엔터면 기본값, 범위 밖이거나 숫자가 아니면 다시 묻는다."""
+    while True:
+        text = input(f"크기 N 입력 ({low}~{high}, 엔터 = {default}): ").strip()
+        if text == "":
+            return default
+        try:
+            n = int(text)
+        except ValueError:
+            print(f"입력 형식 오류: 정수를 입력하세요. ('{text}')")
+            continue
+        if low <= n <= high:
+            return n
+        print(f"입력 범위 오류: {low}부터 {high} 사이의 정수를 입력하세요.")
+
+
+def run_bonus():
+    """모드 3: 패턴 생성기로 N×N 패턴을 만들고, 2차원/1차원 MAC 성능을 비교한다."""
+    print_section("[1] 패턴 생성기")
+    n = read_size()
+    cross, x = make_cross(n), make_x(n)
+    if n <= 15:                                   # 너무 크면 화면을 넘치므로 15×15까지만 그림
+        print(f"\n{n}×{n} 십자가 (Cross)")
+        print_matrix(cross)
+        print(f"\n{n}×{n} X")
+        print_matrix(x)
+    print()
+    for name, pattern, label in (("십자가 패턴", cross, "Cross"), ("X 패턴", x, "X")):
+        score_c, score_x = mac(pattern, cross), mac(pattern, x)
+        verdict = judge(score_c, score_x, "Cross", "X")
+        mark = "✓" if verdict == label else "✗"
+        print(f"{name}: Cross 점수 {score_c} / X 점수 {score_x} → 판정 {verdict} {mark}")
+
+    print_section(f"[2] 1차원 배열 최적화 비교 (동일 입력, 각 {COMPARE_REPEAT}회 평균)")
+    print("크기     2차원(ms)   1차원(ms)   시간 감소   점수 일치")
+    print("-" * 56)
+    for size in sorted({3, 5, 13, 25, n}):        # 과제 크기 4종 + 입력한 N (중복 제거)
+        a, b = make_cross(size), make_x(size)     # 같은 입력을
+        fa, fb = flatten(a), flatten(b)           # 1차원으로 미리 펴 둠 (변환 시간은 측정에서 제외)
+        t2 = measure_mac(a, b, COMPARE_REPEAT)
+        t1 = measure_mac(fa, fb, COMPARE_REPEAT, mac_flat)
+        same = "✓" if mac(a, b) == mac_flat(fa, fb) else "✗"
+        print(f"{f'{size}×{size}':<8}{t2:>10.4f}{t1:>12.4f}{(t2 - t1) / t2 * 100:>11.1f}%{same:>8}")
+
+
 # ===== 메인 =====
 def main():
-    """시작 화면과 모드 선택 메뉴. 1 또는 2가 아니면 다시 묻는다."""
+    """시작 화면과 모드 선택 메뉴. 1, 2, 3이 아니면 다시 묻는다."""
     print("=== Mini NPU Simulator ===")
     while True:
         print()
         print("[모드 선택]")
         print("1. 사용자 입력 (3x3)")
         print("2. data.json 분석")
+        print("3. 보너스: 패턴 생성기 + 1차원 최적화 비교")
         choice = input("선택: ").strip()
         if choice == "1":
             run_mode1()
@@ -313,8 +404,11 @@ def main():
         elif choice == "2":
             run_mode2()
             break
+        elif choice == "3":
+            run_bonus()
+            break
         else:
-            print("1 또는 2를 입력하세요.")
+            print("1, 2, 3 중에서 입력하세요.")
 
 
 if __name__ == "__main__":

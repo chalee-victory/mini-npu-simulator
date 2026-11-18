@@ -9,6 +9,8 @@ EPSILON = 1e-9                                            # 동점으로 볼 점
 LABEL_MAP = {"+": "Cross", "cross": "Cross", "x": "X"}    # 여러 라벨 표기 → 표준 라벨
 REPEAT = 10                                               # 성능 측정 반복 횟수
 LINE = "#" + "-" * 40                                     # 화면 구분선
+CROSS_3 = [[0, 1, 0], [1, 1, 1], [0, 1, 0]]                # 3×3 성능 측정용 십자가 배열
+X_3 = [[1, 0, 1], [0, 1, 0], [1, 0, 1]]                    # 3×3 성능 측정용 X 배열
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.json")  # main.py와 같은 폴더의 data.json
 
 
@@ -42,11 +44,41 @@ def judge(score_a, score_b, label_a="A", label_b="B"):
 # ===== 성능 측정 =====
 def measure_mac(pattern, flt, repeat=REPEAT):
     """mac()을 repeat번 실행해 1회 평균 시간(ms)을 돌려준다. 입출력 시간은 포함하지 않는다."""
+    mac(pattern, flt)                             # 워밍업 1회 (첫 호출의 준비 시간이 측정에 섞이지 않게)
     start = time.perf_counter()                   # 측정 시작 (초 단위, 아주 정밀한 시계)
     for _ in range(repeat):
         mac(pattern, flt)                         # 연산 함수 호출 구간만 측정
     elapsed = time.perf_counter() - start         # 걸린 전체 시간 (초)
     return elapsed / repeat * 1000                # 1회 평균, 초 → ms 변환
+
+
+def print_performance_table(rows):
+    """rows: [(N, 평균 시간 ms), ...] 를 크기 / 평균 시간 / 연산 횟수(N²) 표로 출력한다."""
+    print("크기     평균 시간(ms) 연산 횟수(N²)")   # 한글은 화면에서 2칸을 차지해 f-string 칸 맞춤 대신 직접 맞춤
+    print("-" * 40)
+    for n, avg_ms in rows:
+        print(f"{f'{n}×{n}':<8}{avg_ms:>14.4f}{n * n:>14}")
+
+
+def run_performance(filters):
+    """3×3(고정 배열)과 data.json의 각 크기 필터로 MAC 평균 시간을 재서 [(N, ms), ...]로 반환한다."""
+    rows = [(3, measure_mac(CROSS_3, X_3))]       # data.json에는 3×3 필터가 없으므로 고정 배열 사용
+    for n in sorted(filters):                     # 5, 13, 25 순서로
+        rows.append((n, measure_mac(filters[n]["Cross"], filters[n]["X"])))
+    return rows
+
+
+def print_summary(results):
+    """모드 2 결과 목록으로 전체/통과/실패 수와 실패 케이스 목록을 출력한다."""
+    failed = [r for r in results if not r["passed"]]
+    print(f"총 테스트: {len(results)}개")
+    print(f"통과: {len(results) - len(failed)}개")
+    print(f"실패: {len(failed)}개")
+    if failed:
+        print()
+        print("실패 케이스:")
+        for r in failed:
+            print(f"- {r['key']}: {r['reason']}")
 
 
 # ===== 모드 1: 사용자 입력 =====
@@ -107,6 +139,9 @@ def run_mode1():
     else:
         print(f"판정: {result}")
 
+    print_section(f"[4] 성능 분석 (평균/{REPEAT}회)")
+    print_performance_table([(3, avg_ms)])
+
 
 # ===== 모드 2: data.json 분석 =====
 def check_matrix(matrix, n):
@@ -137,15 +172,13 @@ def load_json(path):
     return None
 
 
-def size_from_key(key, prefix_count):
-    """'size_13' 또는 'size_13_2' 같은 키에서 13을 꺼낸다. 형식이 틀리면 None.
-    prefix_count: 키를 '_'로 나눴을 때 나와야 하는 조각 수 (필터 키 2, 패턴 키 3)"""
-    parts = key.split("_")
-    if len(parts) != prefix_count or parts[0] != "size":
+def get_size(key):
+    """'size_5'나 'size_5_1' 같은 키에서 크기 5를 꺼낸다. 형식이 틀리면 None."""
+    if not key.startswith("size_"):           # 'size_'로 시작해야 함
         return None
     try:
-        return int(parts[1])
-    except ValueError:
+        return int(key.split("_")[1])          # '_'로 자른 두 번째 조각을 숫자로
+    except ValueError:                         # 숫자가 아니면 (예: size_abc)
         return None
 
 
@@ -159,7 +192,7 @@ def load_filters(data):
         return filters
 
     for size_key, group in raw.items():
-        n = size_from_key(size_key, 2)
+        n = get_size(size_key)
         if n is None or not isinstance(group, dict):
             print(f"✗ {size_key}: 필터 키 형식 오류 (size_N 형태가 아님) → 건너뜀")
             continue
@@ -187,7 +220,7 @@ def analyze_pattern(key, item, filters):
     result = {"key": key, "cross": None, "x": None, "verdict": None,
               "expected": None, "passed": False, "reason": ""}
 
-    n = size_from_key(key, 3)
+    n = get_size(key)
     if n is None:
         result["reason"] = "패턴 키 형식 오류 (size_N_idx 형태가 아님)"
         return result
@@ -256,7 +289,11 @@ def run_mode2(path=DATA_FILE):
         print_pattern_result(r)
         results.append(r)
 
-    # TODO: 4단계에서 성능 분석 표와 결과 요약(총/통과/실패, 실패 목록) 연결
+    print_section(f"[3] 성능 분석 (평균/{REPEAT}회)")
+    print_performance_table(run_performance(filters))
+
+    print_section("[4] 결과 요약")
+    print_summary(results)
     return results
 
 
